@@ -7,12 +7,13 @@ local VIM = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 
 ----------------------------------------------------------------
--- НАСТРОЙКИ (меняются и в меню, раздел "Настройки")
+-- НАСТРОЙКИ (меняются в меню, раздел "Настройки")
 ----------------------------------------------------------------
 local CFG = {
-	Delay = 1.5,          -- пауза после респавна перед ресетом (сек)
-	Timeout = 15,         -- сколько ждать респавн, прежде чем повторить ресет (сек)
-	Method = "Play",      -- "Play" = клик PlayButton, "Health" = Humanoid.Health = 0
+	PlayDelay = 0.2,  -- пауза между ресетом и Play (сек)
+	Delay = 1.5,      -- пауза после возрождения до следующего ресета (сек)
+	Retry = 0,        -- 0 = ВЫКЛ. >0 = если возрождения нет столько сек, нажать Play ещё раз
+	Method = "Health", -- способ ресета: "Health" (Health = 0) или "Break" (BreakJoints)
 	Running = false,
 }
 
@@ -21,7 +22,7 @@ local conns = {}
 local count = 0
 
 ----------------------------------------------------------------
--- ЦВЕТА
+-- ЦВЕТА / GUI helpers
 ----------------------------------------------------------------
 local C = {
 	black = Color3.fromRGB(14, 14, 14),
@@ -32,9 +33,6 @@ local C = {
 	white = Color3.fromRGB(245, 245, 245),
 }
 
-----------------------------------------------------------------
--- GUI helpers
-----------------------------------------------------------------
 local function mk(class, props, parent)
 	local o = Instance.new(class)
 	for k, v in pairs(props) do o[k] = v end
@@ -79,7 +77,7 @@ local gui = mk("ScreenGui", {
 }, nil)
 gui.Parent = parentGui()
 
-local W, H = 190, 142
+local W, H = 190, 190
 local root = mk("Frame", {
 	Size = UDim2.fromOffset(W, H), Position = UDim2.new(0, 12, 0.3, 0),
 	BackgroundColor3 = C.black, BorderSizePixel = 0,
@@ -87,7 +85,6 @@ local root = mk("Frame", {
 round(root, 8)
 stroke(root, C.yellow, 1.5)
 
--- шапка
 local header = mk("Frame", { Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = C.yellow, BorderSizePixel = 0 }, root)
 round(header, 8)
 mk("Frame", { Size = UDim2.new(1, 0, 0, 8), Position = UDim2.new(0, 0, 1, -8), BackgroundColor3 = C.yellow, BorderSizePixel = 0 }, header)
@@ -95,12 +92,10 @@ label(header, "  AUTO RESET", UDim2.new(0, 0, 0, 0), UDim2.new(1, -60, 1, 0), C.
 local minBtn = button(header, "—", UDim2.new(1, -54, 0, 3), UDim2.fromOffset(24, 20), C.black, C.yellow, 14)
 local closeBtn = button(header, "✕", UDim2.new(1, -28, 0, 3), UDim2.fromOffset(24, 20), C.black, C.white, 12)
 
--- кружок в свёрнутом виде
 local bubble = button(root, "AR", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 1, 0), C.yellow, C.black, 13)
 bubble.Visible = false
 bubble.AutoButtonColor = false
 
--- вкладки
 local body = mk("Frame", { Size = UDim2.new(1, 0, 1, -26), Position = UDim2.new(0, 0, 0, 26), BackgroundTransparency = 1 }, root)
 local tabMain = button(body, "Главная", UDim2.fromOffset(6, 4), UDim2.fromOffset(86, 20), C.yellow, C.black, 11)
 local tabSet = button(body, "Настройки", UDim2.fromOffset(98, 4), UDim2.fromOffset(86, 20), C.dark, C.white, 11)
@@ -123,8 +118,8 @@ tabSet.Activated:Connect(function() showTab(false) end)
 -- ГЛАВНАЯ
 ----------------------------------------------------------------
 local statusLbl = label(pageMain, "Статус: ожидание", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 18), C.white, nil, 12)
-local countLbl = label(pageMain, "Ресетов: 0", UDim2.new(0, 0, 0, 18), UDim2.new(1, 0, 0, 16), C.lgray, nil, 11)
-local toggleBtn = button(pageMain, "▶  СТАРТ", UDim2.new(0, 0, 0, 40), UDim2.new(1, 0, 0, 36), C.yellow, C.black, 15)
+local countLbl = label(pageMain, "Циклов: 0", UDim2.new(0, 0, 0, 20), UDim2.new(1, 0, 0, 16), C.lgray, nil, 11)
+local toggleBtn = button(pageMain, "▶  СТАРТ", UDim2.new(0, 0, 0, 52), UDim2.new(1, 0, 0, 46), C.yellow, C.black, 16)
 
 local function setStatus(t) statusLbl.Text = "Статус: " .. t end
 
@@ -140,10 +135,6 @@ local function refreshToggle()
 		setStatus("пауза")
 	end
 end
-toggleBtn.Activated:Connect(function()
-	CFG.Running = not CFG.Running
-	refreshToggle()
-end)
 
 ----------------------------------------------------------------
 -- НАСТРОЙКИ
@@ -167,27 +158,28 @@ local function stepper(y, text, key, step, minv, maxv)
 	plus.Activated:Connect(function() set(CFG[key] + step) end)
 	box.FocusLost:Connect(function() set(tonumber(box.Text) or CFG[key]) end)
 end
-stepper(0, "Пауза, сек", "Delay", 0.1, 0, 60)
-stepper(26, "Таймаут, сек", "Timeout", 1, 3, 120)
+stepper(0, "До Play, сек", "PlayDelay", 0.1, 0, 10)
+stepper(26, "После спавна", "Delay", 0.1, 0, 60)
+stepper(52, "Повтор (0=выкл)", "Retry", 1, 0, 120)
 
-local methodBtn = button(pageSet, "Метод: кнопка Play", UDim2.fromOffset(0, 54), UDim2.new(1, 0, 0, 24), C.dark, C.white, 11)
+local methodBtn = button(pageSet, "Ресет: Health = 0", UDim2.fromOffset(0, 80), UDim2.new(1, 0, 0, 24), C.dark, C.white, 11)
 stroke(methodBtn, C.yellow, 1)
 methodBtn.Activated:Connect(function()
-	if CFG.Method == "Play" then
-		CFG.Method = "Health"
-		methodBtn.Text = "Метод: Health = 0"
+	if CFG.Method == "Health" then
+		CFG.Method = "Break"
+		methodBtn.Text = "Ресет: BreakJoints"
 	else
-		CFG.Method = "Play"
-		methodBtn.Text = "Метод: кнопка Play"
+		CFG.Method = "Health"
+		methodBtn.Text = "Ресет: Health = 0"
 	end
 end)
+
+local testBtn = button(pageSet, "Тест Play (1 раз)", UDim2.fromOffset(0, 108), UDim2.new(1, 0, 0, 24), C.gray, C.white, 11)
 
 ----------------------------------------------------------------
 -- СВОРАЧИВАНИЕ / ЗАКРЫТИЕ / ПЕРЕТАСКИВАНИЕ
 ----------------------------------------------------------------
-local minimized = false
 local function setMin(v)
-	minimized = v
 	header.Visible = not v
 	body.Visible = not v
 	bubble.Visible = v
@@ -236,8 +228,25 @@ draggable(header)
 draggable(bubble, function() setMin(false) end)
 
 ----------------------------------------------------------------
--- ЛОГИКА
+-- ДЕЙСТВИЯ
 ----------------------------------------------------------------
+-- ресет персонажа
+local function doReset()
+	local ch = player.Character
+	if not ch then return false end
+	if CFG.Method == "Break" then
+		pcall(function() ch:BreakJoints() end)
+		return true
+	end
+	local hum = ch:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.Health = 0
+		return true
+	end
+	return false
+end
+
+-- Play: твоя команда
 local function pressPlay()
 	local ok = pcall(function()
 		local btn = player.PlayerGui:WaitForChild("SpawnGui", 3):WaitForChild("Customization", 3):WaitForChild("PlayButton", 3)
@@ -248,33 +257,35 @@ local function pressPlay()
 	return ok
 end
 
-local function doReset()
-	if CFG.Method == "Health" then
-		local ch = player.Character
-		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-		if hum then hum.Health = 0 end
-	else
-		pressPlay()
-	end
-end
+testBtn.Activated:Connect(function()
+	local ok = pressPlay()
+	testBtn.Text = ok and "Play нажат ✓" or "Кнопка не найдена ✕"
+	task.delay(1.5, function()
+		if alive then testBtn.Text = "Тест Play (1 раз)" end
+	end)
+end)
 
-local function isReady(ch)
-	if not ch then return false end
-	local hum = ch:FindFirstChildOfClass("Humanoid")
-	return hum and hum.Health > 0 and ch:FindFirstChild("HumanoidRootPart") ~= nil
-end
+----------------------------------------------------------------
+-- ОТСЛЕЖИВАНИЕ ВОЗРОЖДЕНИЯ (по событиям)
+-- spawnPending = true, когда появился новый живой персонаж
+----------------------------------------------------------------
+local spawnPending = false
 
--- ждём нового (или готового) персонажа; oldChar = персонаж, которого НЕ считаем
-local function waitRespawn(oldChar)
-	local t0 = os.clock()
-	while alive and CFG.Running do
-		local ch = player.Character
-		if ch ~= oldChar and isReady(ch) then return true end
-		if os.clock() - t0 > CFG.Timeout then return false end
-		task.wait(0.1)
-	end
-	return false
+local function watchChar(ch)
+	task.spawn(function()
+		local hum = ch:WaitForChild("Humanoid", 15)
+		local hrp = ch:WaitForChild("HumanoidRootPart", 15)
+		if not alive or not hum or not hrp then return end
+		if player.Character == ch and hum.Health > 0 then
+			spawnPending = true
+		end
+		table.insert(conns, hum.Died:Connect(function()
+			if player.Character == ch then spawnPending = false end
+		end))
+	end)
 end
+table.insert(conns, player.CharacterAdded:Connect(watchChar))
+if player.Character then watchChar(player.Character) end
 
 local function sleep(sec)
 	local t0 = os.clock()
@@ -283,36 +294,62 @@ local function sleep(sec)
 	end
 end
 
+----------------------------------------------------------------
+-- ГЛАВНЫЙ ЦИКЛ
+----------------------------------------------------------------
 task.spawn(function()
 	while alive do
 		if CFG.Running then
-			-- 1) убеждаемся, что персонаж есть
-			if not isReady(player.Character) then
-				setStatus("ждём респавн")
-				waitRespawn(nil)
+			-- 1) РЕСЕТ
+			spawnPending = false
+			setStatus("ресет")
+			doReset()
+
+			-- 2) ждём 0.2 сек
+			if alive and CFG.Running then
+				setStatus("ждём " .. CFG.PlayDelay .. "с")
+				sleep(CFG.PlayDelay)
 			end
-			-- 2) пауза
-			if CFG.Running and alive then
-				setStatus("пауза " .. CFG.Delay .. "с")
+
+			-- 3) PLAY
+			if alive and CFG.Running then
+				setStatus("Play")
+				pressPlay()
+			end
+
+			-- 4) ждём возрождение
+			if alive and CFG.Running then
+				setStatus("ждём возрождение")
+				local t0 = os.clock()
+				while alive and CFG.Running and not spawnPending do
+					task.wait(0.1)
+					if CFG.Retry > 0 and os.clock() - t0 >= CFG.Retry then
+						pressPlay() -- страховка: нажать Play ещё раз
+						t0 = os.clock()
+					end
+				end
+			end
+
+			-- 5) ждём 1.5 сек после возрождения
+			if alive and CFG.Running then
+				setStatus("возрожден ✓ ждём " .. CFG.Delay .. "с")
 				sleep(CFG.Delay)
 			end
-			-- 3) ресет
-			if CFG.Running and alive then
-				local old = player.Character
-				setStatus("ресет")
-				doReset()
+
+			if alive and CFG.Running then
 				count += 1
-				countLbl.Text = "Ресетов: " .. count
-				-- 4) ждём респавн
-				setStatus("ждём респавн")
-				if not waitRespawn(old) and CFG.Running then
-					setStatus("таймаут, повтор")
-				end
+				countLbl.Text = "Циклов: " .. count
+				-- дальше цикл снова идёт с ресета (шаг 1)
 			end
 		else
 			task.wait(0.2)
 		end
 	end
+end)
+
+toggleBtn.Activated:Connect(function()
+	CFG.Running = not CFG.Running
+	refreshToggle()
 end)
 
 refreshToggle()
