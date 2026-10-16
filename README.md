@@ -10,9 +10,10 @@ local player = Players.LocalPlayer
 -- НАСТРОЙКИ (меняются в меню, раздел "Настройки")
 ----------------------------------------------------------------
 local CFG = {
-	PlayDelay = 0.2,  -- пауза между ресетом и Play (сек)
-	Delay = 1.5,      -- пауза после возрождения до следующего ресета (сек)
-	Retry = 0,        -- 0 = ВЫКЛ. >0 = если возрождения нет столько сек, нажать Play ещё раз
+	PlayDelay = 0.2,   -- пауза между ресетом и кликом (сек)
+	Delay = 1.5,       -- пауза после возрождения до следующего ресета (сек)
+	Retry = 0,         -- 0 = ВЫКЛ. >0 = если возрождения нет столько сек, кликнуть ещё раз
+	ClickUp = 80,      -- на сколько % выше центра экрана кликать (100 = самый верх экрана)
 	Method = "Health", -- способ ресета: "Health" (Health = 0) или "Break" (BreakJoints)
 	Running = false,
 }
@@ -77,7 +78,7 @@ local gui = mk("ScreenGui", {
 }, nil)
 gui.Parent = parentGui()
 
-local W, H = 190, 190
+local W, H = 190, 216
 local root = mk("Frame", {
 	Size = UDim2.fromOffset(W, H), Position = UDim2.new(0, 12, 0.3, 0),
 	BackgroundColor3 = C.black, BorderSizePixel = 0,
@@ -119,7 +120,7 @@ tabSet.Activated:Connect(function() showTab(false) end)
 ----------------------------------------------------------------
 local statusLbl = label(pageMain, "Статус: ожидание", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 18), C.white, nil, 12)
 local countLbl = label(pageMain, "Циклов: 0", UDim2.new(0, 0, 0, 20), UDim2.new(1, 0, 0, 16), C.lgray, nil, 11)
-local toggleBtn = button(pageMain, "▶  СТАРТ", UDim2.new(0, 0, 0, 52), UDim2.new(1, 0, 0, 46), C.yellow, C.black, 16)
+local toggleBtn = button(pageMain, "▶  СТАРТ", UDim2.new(0, 0, 0, 56), UDim2.new(1, 0, 0, 50), C.yellow, C.black, 16)
 
 local function setStatus(t) statusLbl.Text = "Статус: " .. t end
 
@@ -158,11 +159,12 @@ local function stepper(y, text, key, step, minv, maxv)
 	plus.Activated:Connect(function() set(CFG[key] + step) end)
 	box.FocusLost:Connect(function() set(tonumber(box.Text) or CFG[key]) end)
 end
-stepper(0, "До Play, сек", "PlayDelay", 0.1, 0, 10)
+stepper(0, "До клика, сек", "PlayDelay", 0.1, 0, 10)
 stepper(26, "После спавна", "Delay", 0.1, 0, 60)
 stepper(52, "Повтор (0=выкл)", "Retry", 1, 0, 120)
+stepper(78, "Клик выше, %", "ClickUp", 5, 0, 100)
 
-local methodBtn = button(pageSet, "Ресет: Health = 0", UDim2.fromOffset(0, 80), UDim2.new(1, 0, 0, 24), C.dark, C.white, 11)
+local methodBtn = button(pageSet, "Ресет: Health = 0", UDim2.fromOffset(0, 106), UDim2.new(1, 0, 0, 24), C.dark, C.white, 11)
 stroke(methodBtn, C.yellow, 1)
 methodBtn.Activated:Connect(function()
 	if CFG.Method == "Health" then
@@ -174,7 +176,7 @@ methodBtn.Activated:Connect(function()
 	end
 end)
 
-local testBtn = button(pageSet, "Тест Play (1 раз)", UDim2.fromOffset(0, 108), UDim2.new(1, 0, 0, 24), C.gray, C.white, 11)
+local testBtn = button(pageSet, "Тест клика (1 раз)", UDim2.fromOffset(0, 134), UDim2.new(1, 0, 0, 24), C.gray, C.white, 11)
 
 ----------------------------------------------------------------
 -- СВОРАЧИВАНИЕ / ЗАКРЫТИЕ / ПЕРЕТАСКИВАНИЕ
@@ -246,22 +248,47 @@ local function doReset()
 	return false
 end
 
--- Play: твоя команда
+-- точка клика: по центру экрана по горизонтали,
+-- по вертикали выше центра на ClickUp% (100% = верхний край экрана)
+local function clickPoint()
+	local cam = workspace.CurrentCamera
+	if not cam then return nil end
+	local vp = cam.ViewportSize
+	local x = vp.X / 2
+	local y = vp.Y / 2 - (vp.Y / 2) * (CFG.ClickUp / 100)
+	return x, y
+end
+
+-- КЛИК (замена кнопке Play)
 local function pressPlay()
+	local x, y = clickPoint()
+	if not x then return false end
 	local ok = pcall(function()
-		local btn = player.PlayerGui:WaitForChild("SpawnGui", 3):WaitForChild("Customization", 3):WaitForChild("PlayButton", 3)
-		local pos = btn.AbsolutePosition + btn.AbsoluteSize / 2
-		VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
-		VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+		VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+		task.wait(0.03)
+		VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
 	end)
-	return ok
+	return ok, x, y
+end
+
+-- маркер точки клика (для проверки)
+local function showMarker(x, y)
+	local dot = mk("Frame", {
+		Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(x - 7, y - 7),
+		BackgroundColor3 = C.yellow, BorderSizePixel = 0, ZIndex = 50,
+	}, gui)
+	round(dot, 7)
+	stroke(dot, C.black, 2)
+	task.delay(0.8, function() pcall(function() dot:Destroy() end) end)
 end
 
 testBtn.Activated:Connect(function()
+	local x, y = clickPoint()
+	if x then showMarker(x, y) end
 	local ok = pressPlay()
-	testBtn.Text = ok and "Play нажат ✓" or "Кнопка не найдена ✕"
+	testBtn.Text = ok and "Клик выполнен ✓" or "Ошибка клика ✕"
 	task.delay(1.5, function()
-		if alive then testBtn.Text = "Тест Play (1 раз)" end
+		if alive then testBtn.Text = "Тест клика (1 раз)" end
 	end)
 end)
 
@@ -311,9 +338,9 @@ task.spawn(function()
 				sleep(CFG.PlayDelay)
 			end
 
-			-- 3) PLAY
+			-- 3) КЛИК
 			if alive and CFG.Running then
-				setStatus("Play")
+				setStatus("клик")
 				pressPlay()
 			end
 
@@ -324,7 +351,7 @@ task.spawn(function()
 				while alive and CFG.Running and not spawnPending do
 					task.wait(0.1)
 					if CFG.Retry > 0 and os.clock() - t0 >= CFG.Retry then
-						pressPlay() -- страховка: нажать Play ещё раз
+						pressPlay() -- страховка: кликнуть ещё раз
 						t0 = os.clock()
 					end
 				end
