@@ -1,5 +1,3 @@
--- Auto Reset Loop | чёрный / жёлтый / серый / белый
--- Цикл: ждём респавн -> пауза -> ресет (клик PlayButton) -> ждём респавн -> ...
 
 if _G.ARL_Destroy then pcall(_G.ARL_Destroy) end
 
